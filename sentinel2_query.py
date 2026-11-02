@@ -2,7 +2,9 @@
 GeoJSON study areas and time windows, with optional download support.
 
 Requires: requests
-Credentials (only needed for downloads) via environment variables:
+Platform API credentials (used by login) via environment variables:
+    PLATFORM_USERNAME, PLATFORM_PASSWORD
+Copernicus download credentials (only needed for downloads):
     COPERNICUS_CLIENT_ID, COPERNICUS_CLIENT_SECRET
 """
 
@@ -20,6 +22,26 @@ TOKEN_URL = (
 DOWNLOAD_URL = "https://zipper.dataspace.copernicus.eu/odata/v1/Products"
 
 SESSION = requests.Session()
+
+
+def login(login_url: str, username: str | None = None, password: str | None = None) -> str:
+    """Log in to the platform API with username/password sent as a JSON POST
+    payload. The returned token (or session cookie) is stored on the shared
+    SESSION, so all later calls (e.g. get_study_areas) stay authenticated.
+    Credentials default to the PLATFORM_USERNAME / PLATFORM_PASSWORD env vars.
+    Returns the access token, or an empty string for cookie-based sessions."""
+    username = username if username is not None else os.environ["PLATFORM_USERNAME"]
+    password = password if password is not None else os.environ["PLATFORM_PASSWORD"]
+    resp = SESSION.post(login_url, json={"username": username, "password": password}, timeout=60)
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    token = data.get("access_token") or data.get("accessToken") or data.get("token")
+    if token:
+        SESSION.headers.update({"Authorization": f"Bearer {token}"})
+    return token or ""
 
 
 def geojson_to_wkt(geojson: dict) -> str:
@@ -45,7 +67,8 @@ def geojson_to_wkt(geojson: dict) -> str:
 
 
 def get_study_areas(api_url: str, headers: dict | None = None, params: dict | None = None) -> list[dict]:
-    """Fetch GeoJSON study areas from your platform API.
+    """Fetch GeoJSON study areas from the platform API using the
+    authenticated SESSION (call login() first).
     Returns a list of GeoJSON dicts (Feature, FeatureCollection, or geometry)."""
     resp = SESSION.get(api_url, headers=headers or {}, params=params or {}, timeout=60)
     resp.raise_for_status()
@@ -163,7 +186,9 @@ def summarize(products: list[dict]) -> list[dict]:
 if __name__ == "__main__":
     import sys
 
-    study_area = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {
+    login(os.environ["PLATFORM_LOGIN_URL"])
+    areas = get_study_areas(os.environ["PLATFORM_STUDY_AREAS_URL"])
+    study_area = areas[0] if areas else json.loads(sys.argv[1]) if len(sys.argv) > 1 else {
         "type": "Polygon",
         "coordinates": [[[23.0, 37.5], [24.0, 37.5], [24.0, 38.5], [23.0, 38.5], [23.0, 37.5]]],
     }
